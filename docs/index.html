@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SudokuSolver — live demo</title>
+<style>
+  :root {
+    --bg: #FAF8F2; --ink: #2A2438; --soft: #8A8296; --line: #B9B2A4;
+    --thick: #3A3348; --gold: #C9A34A; --gold-soft: #EFE3C4; --card: #FFFFFF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1B1626; --ink: #E8E4DA; --soft: #9A93A8; --line: #4A4260;
+      --thick: #B9B2A4; --gold: #C9A34A; --gold-soft: #3A3348; --card: #241E33;
+    }
+  }
+  body {
+    background: var(--bg); color: var(--ink); margin: 0;
+    font-family: Georgia, serif; line-height: 1.5;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 2rem 1rem 4rem;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 0.2rem; font-weight: 600; }
+  .sub { color: var(--soft); font-style: italic; margin: 0 0 1.4rem; font-size: 0.95rem; text-align: center; }
+  #board {
+    display: grid; grid-template-columns: repeat(9, 2.2rem);
+    border: 2.5px solid var(--thick); background: var(--card);
+  }
+  #board input {
+    width: 2.2rem; height: 2.2rem; border: 0.5px solid var(--line);
+    text-align: center; font-size: 1.05rem; font-family: inherit;
+    background: transparent; color: var(--ink); box-sizing: border-box;
+  }
+  #board input:nth-child(9n+3), #board input:nth-child(9n+6) { border-right: 2px solid var(--thick); }
+  #board input.rowline { border-bottom: 2px solid var(--thick); }
+  #board input.given { color: var(--soft); }
+  #board input.solved { color: var(--gold); font-weight: bold; }
+  #board input:focus { outline: 2px solid var(--gold); }
+  .row { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; justify-content: center; }
+  button {
+    font: inherit; font-size: 0.9rem; padding: 0.45rem 1rem; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--card); color: var(--ink);
+  }
+  button.primary { background: var(--gold); border-color: var(--gold); color: #fff; font-weight: bold; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  #status { margin-top: 0.9rem; font-size: 0.92rem; color: var(--soft); min-height: 1.4em; text-align: center; }
+  #status .time { color: var(--gold); font-weight: bold; }
+  footer { margin-top: 2rem; color: var(--soft); font-size: 0.82rem; max-width: 30rem; text-align: center; }
+  footer a { color: var(--gold); }
+</style>
+</head>
+<body>
+<h1>SudokuSolver</h1>
+<p class="sub">the handwritten 2023 Python, running unmodified in your browser via Pyodide</p>
+
+<div id="board"></div>
+<div class="row">
+  <button id="solve" class="primary" disabled>Solve</button>
+  <button data-preset="typical">Typical</button>
+  <button data-preset="inkala">Inkala 2010 ("world's hardest")</button>
+  <button data-preset="empty">Empty grid</button>
+  <button id="clear">Clear</button>
+</div>
+<p id="status">Loading Python runtime (~10 MB, once)&hellip;</p>
+
+<footer>
+  This page loads <a href="SudokuSolver.py">the actual solver source</a> —
+  backtracking over a constraint graph with MRV ordering — into a WebAssembly
+  Python and calls <code>Puzzle.solve()</code> on whatever you enter. No
+  server, no port, no tricks. <a href="https://github.com/SebastianKane/SudokuSolver">Source &amp; docs</a>.
+</footer>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js"></script>
+<script>
+const PRESETS = {
+  typical: "530070000600195000098000060800060003400803001700020006060000280000419005000080079",
+  inkala:  "005300000800000020070010500400005300010070006003200080060500009004000030000009700",
+  empty:   "0".repeat(81),
+};
+const board = document.getElementById("board");
+const cells = [];
+for (let i = 0; i < 81; i++) {
+  const inp = document.createElement("input");
+  inp.maxLength = 1; inp.inputMode = "numeric";
+  if (Math.floor(i / 9) === 2 || Math.floor(i / 9) === 5) inp.classList.add("rowline");
+  inp.addEventListener("input", () => { if (!/^[1-9]$/.test(inp.value)) inp.value = ""; });
+  board.appendChild(inp); cells.push(inp);
+}
+function setBoard(s, cls) {
+  cells.forEach((c, i) => {
+    c.value = s[i] === "0" ? "" : s[i];
+    c.className = c.className.replace(/\b(given|solved)\b/g, "").trim();
+    if (s[i] !== "0" && cls) c.classList.add(cls);
+  });
+}
+function readBoard() { return cells.map(c => c.value || "0").join(""); }
+
+document.querySelectorAll("[data-preset]").forEach(b =>
+  b.addEventListener("click", () => setBoard(PRESETS[b.dataset.preset], "given")));
+document.getElementById("clear").addEventListener("click", () => setBoard(PRESETS.empty, ""));
+
+const status = document.getElementById("status");
+const solveBtn = document.getElementById("solve");
+let py = null;
+
+(async () => {
+  try {
+    py = await loadPyodide();
+    const src = await (await fetch("SudokuSolver.py")).text();
+    py.FS.writeFile("SudokuSolver.py", src);
+    py.runPython("import SudokuSolver");
+    setBoard(PRESETS.typical, "given");
+    solveBtn.disabled = false;
+    status.textContent = "Ready. Pick a preset or enter your own, then Solve.";
+  } catch (e) {
+    status.textContent = "Runtime failed to load: " + e;
+  }
+})();
+
+solveBtn.addEventListener("click", () => {
+  const given = readBoard();
+  status.textContent = "Solving…";
+  solveBtn.disabled = true;
+  setTimeout(() => {
+    try {
+      py.globals.set("puzzle_str", given);
+      const t0 = performance.now();
+      const result = py.runPython(
+        "p = SudokuSolver.Puzzle()\n" +
+        "p.load_puzzle(puzzle_str)\n" +
+        "r = p.solve()\n" +
+        "r.replace('\\n','') if r else ''");
+      const ms = (performance.now() - t0).toFixed(1);
+      if (result && result.length === 81) {
+        cells.forEach((c, i) => {
+          if (given[i] === "0") { c.value = result[i]; c.classList.add("solved"); }
+        });
+        status.innerHTML = "Solved in <span class='time'>" + ms + " ms</span> — by 150 lines written in 2023.";
+      } else {
+        status.textContent = "No solution exists for that grid (determined in " + ms + " ms).";
+      }
+    } catch (e) {
+      status.textContent = "Error: " + e;
+    }
+    solveBtn.disabled = false;
+  }, 30);
+});
+</script>
+</body>
+</html>
